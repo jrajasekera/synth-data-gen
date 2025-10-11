@@ -59,6 +59,25 @@ E) Incremental Updates   ──► delta.json (append-only synthetic data)
 
 ---
 
+## Current Status (as of October 2025)
+
+Implemented:
+- Typer-based CLI covering profiling, synthesis, rules export, validation, and report rendering with configurable array caps.
+- Profiler with heuristic + optional LLM map-reduce pass capturing types, enum candidates, regex hints, semantic labels, anomalies, PK candidates, and array length statistics.
+- Rule synthesis that persists inferred constraints (regex, semantic type, array metadata, PII likelihood) with privacy sanitisation for sensitive enums and optional LLM refinements.
+- Synthetic generator supporting recursive object/array traversal, regex-aware text synthesis, Faker semantic fillers, plugin overrides, and privacy-aware rule adjustments.
+- Validation that reprofiles source/synthetic data, compares type/coverage/numeric/array metrics, and renders an HTML report with delta tables.
+- Integration tests covering the profile→rules→generate pipeline, regex compliance, plugin hooks, nested arrays, and array-cap enforcement.
+
+Outstanding (high priority):
+- Expanded LLM capabilities (confidence scoring, anomaly narratives, conditional/text rule authoring) to further reduce heuristic fallbacks.
+- Advanced rule synthesis (composite keys, FK graphs, functional dependencies, correlation/temporal models, conditional constraints).
+- Rich synthetic generation (conditional logic, streaming/delta modes, semantic templates, scenario presets) and tighter plugin ecosystem.
+- Stat/Privacy validation (KS/χ²/PSI/Wasserstein), k-anonymity/DP checks, privacy reporting, and visual dashboards.
+- Temporal/correlation modules, incremental updates, caching strategy, configuration ergonomics, and comprehensive documentation.
+
+---
+
 ## Detailed implementation plan
 
 ### 0) Repo skeleton & tooling

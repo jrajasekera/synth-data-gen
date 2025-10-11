@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Synthetic Data Validation Report</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; }
+      table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+      th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+      th { background-color: #f2f2f2; }
+      .status-ok { color: #2e7d32; }
+      .status-missing { color: #c62828; }
+    </style>
+  </head>
+  <body>
+    <h1>Synthetic Data Validation Report</h1>
+
+    <section>
+      <h2>Summary</h2>
+      <ul>
+        <li>Source records: {{ validation.summary.source_records }}</li>
+        <li>Synthetic records: {{ validation.summary.synthetic_records }}</li>
+        <li>Rule violations: {{ validation.rule_violations | length }}</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Field Comparisons</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Status</th>
+            <th>Type Alignment</th>
+            <th>Required Rate Δ</th>
+            <th>Numeric Δ</th>
+            <th>Array Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for path, comparison in validation.field_comparisons.items() %}
+          <tr>
+            <td><code>{{ path }}</code></td>
+            <td class="status-{{ comparison.status }}">{{ comparison.status }}</td>
+            <td>{{ comparison.type_alignment }}</td>
+            <td>{{ '%.4f' % comparison.required_rate_delta if comparison.required_rate_delta is defined else 'N/A' }}</td>
+            <td>
+              {% if comparison.numeric %}
+              mean: {{ '%.3f' % comparison.numeric.mean if comparison.numeric.mean is defined else '–' }},
+              std: {{ '%.3f' % comparison.numeric.std if comparison.numeric.std is defined else '–' }},
+              min: {{ '%.3f' % comparison.numeric.min if comparison.numeric.min is defined else '–' }},
+              max: {{ '%.3f' % comparison.numeric.max if comparison.numeric.max is defined else '–' }}
+              {% else %}
+              N/A
+              {% endif %}
+            </td>
+            <td>
+              {% if comparison.array %}
+              min: {{ '%.0f' % comparison.array.min_items if comparison.array.min_items is defined else '–' }},
+              max: {{ '%.0f' % comparison.array.max_items if comparison.array.max_items is defined else '–' }},
+              mean: {{ '%.2f' % comparison.array.mean_items if comparison.array.mean_items is defined else '–' }}
+              {% else %}
+              N/A
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    {% if validation.rule_violations %}
+    <section>
+      <h2>Rule Violations</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th>Issue</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for violation in validation.rule_violations %}
+          <tr>
+            <td><code>{{ violation.path }}</code></td>
+            <td>{{ violation.issue }}</td>
+            <td>
+              {% if violation.expected is defined %}
+                expected: {{ violation.expected }}, actual: {{ violation.actual }}
+              {% elif violation.missing is defined %}
+                missing: {{ violation.missing | join(', ') }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+  </body>
+</html>

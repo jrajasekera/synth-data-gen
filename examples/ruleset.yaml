@@ -1,0 +1,17 @@
+fields:
+  $.id:
+    type: number
+    numeric:
+      min: 1
+      max: 1000
+    required_rate: 1.0
+  $.name:
+    type: string
+    length:
+      min: 3
+      max: 12
+    required_rate: 1.0
+  $.email:
+    type: string
+    format: email
+    required_rate: 1.0

@@ -170,6 +170,15 @@ wheels = [
 ]
 
 [[package]]
+name = "exrex"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/9a/580635ea99178aba728de721e88e5a0d18b528805c58e8b26eab87be2a45/exrex-0.12.0.tar.gz", hash = "sha256:3f582add0700d4141e279625252e7a0655f9ad81feab3b8ab9077966668a2c99", size = 19766, upload-time = "2024-11-13T13:46:36.399Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/90/89fdfc6f426cc6414cc8e1c599c4333d800f8f3ff05cb6ce69c8d0eaa245/exrex-0.12.0-py3-none-any.whl", hash = "sha256:1228f2e3afb008cacf6adc3ec20b098f1303886f4382b57cdf3b7259fb7c0ad3", size = 23590, upload-time = "2024-11-13T13:46:34.647Z" },
+]
+
+[[package]]
 name = "faker"
 version = "37.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1202,6 +1211,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "diskcache" },
+    { name = "exrex" },
     { name = "faker" },
     { name = "genson" },
     { name = "httpx" },
@@ -1215,6 +1225,7 @@ dependencies = [
     { name = "plotly" },
     { name = "presidio-analyzer" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -1225,6 +1236,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "diskcache", specifier = ">=5.6.3" },
+    { name = "exrex", specifier = ">=0.11.0" },
     { name = "faker", specifier = ">=37.11.0" },
     { name = "genson", specifier = ">=1.3.0" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -1238,6 +1250,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=6.3.1" },
     { name = "presidio-analyzer", specifier = ">=2.2.360" },
     { name = "pydantic", specifier = ">=2.12.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "scikit-learn", specifier = ">=1.7.2" },
     { name = "scipy", specifier = ">=1.16.2" },
