@@ -69,6 +69,151 @@
       </table>
     </section>
 
+    {% if validation.correlation_drift %}
+    {% set corr = validation.correlation_drift %}
+    {% if corr.pearson_delta or corr.cramers_v_delta %}
+    <section>
+      <h2>Correlation Drift</h2>
+      {% if corr.pearson_delta %}
+      <h3>Pearson Δ</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field A</th>
+            <th>Field B</th>
+            <th>Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row, cols in corr.pearson_delta.items() %}
+            {% for col, delta in cols.items() %}
+          <tr>
+            <td><code>{{ row }}</code></td>
+            <td><code>{{ col }}</code></td>
+            <td>{{ '%.4f' % delta }}</td>
+          </tr>
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% if corr.cramers_v_delta %}
+      <h3>Cramér's V Δ</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Field A</th>
+            <th>Field B</th>
+            <th>Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row, cols in corr.cramers_v_delta.items() %}
+            {% for col, delta in cols.items() %}
+          <tr>
+            <td><code>{{ row }}</code></td>
+            <td><code>{{ col }}</code></td>
+            <td>{{ '%.4f' % delta }}</td>
+          </tr>
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </section>
+    {% endif %}
+    {% endif %}
+
+    {% if validation.temporal_alignment %}
+    <section>
+      <h2>Temporal Alignment</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Source Trend</th>
+            <th>Synth Trend</th>
+            <th>Trend Match</th>
+            <th>Seasonality Match</th>
+            <th>KS Statistic</th>
+            <th>KS p-value</th>
+            <th>Weekday Distance</th>
+            <th>Hour Distance</th>
+            <th>Coverage Ratio</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for path, details in validation.temporal_alignment.items() %}
+          {% set stats = details.statistics or {} %}
+          {% set ks = stats.ks or {} %}
+          <tr>
+            <td><code>{{ path }}</code></td>
+            <td>{{ details.source.trend }}</td>
+            <td>{{ details.synthetic.trend }}</td>
+            <td>{{ stats.trend_match }}</td>
+            <td>{{ stats.seasonality_match }}</td>
+            <td>
+              {% if ks.statistic is not none %}
+                {{ '%.4f' % ks.statistic }}
+              {% else %}
+                N/A
+              {% endif %}
+            </td>
+            <td>
+              {% if ks.pvalue is not none %}
+                {{ '%.4f' % ks.pvalue }}
+              {% else %}
+                N/A
+              {% endif %}
+            </td>
+            <td>{{ '%.4f' % stats.weekday_distance if stats.weekday_distance is not none else 'N/A' }}</td>
+            <td>{{ '%.4f' % stats.hour_distance if stats.hour_distance is not none else 'N/A' }}</td>
+            <td>
+              {% if stats.coverage_ratio is not none %}
+                {{ '%.3f' % stats.coverage_ratio }}
+              {% else %}
+                N/A
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    {% if validation.privacy %}
+    {% set privacy = validation.privacy %}
+    <section>
+      <h2>Privacy</h2>
+      {% if privacy.k_anonymity %}
+      <h3>k-Anonymity</h3>
+      <ul>
+        <li>Quasi-identifiers: {{ privacy.k_anonymity.quasi_identifiers | join(', ') if privacy.k_anonymity.quasi_identifiers else 'None' }}</li>
+        <li>Target k: {{ privacy.k_anonymity.target_k }}</li>
+        <li>Source min group: {{ privacy.k_anonymity.source.k if privacy.k_anonymity.source.k is not none else 'N/A' }}</li>
+        <li>Synthetic min group: {{ privacy.k_anonymity.synthetic.k if privacy.k_anonymity.synthetic.k is not none else 'N/A' }}</li>
+        {% if privacy.k_anonymity.generalized_fields %}
+        <li>Generalized fields: {{ privacy.k_anonymity.generalized_fields | join(', ') }}</li>
+        {% endif %}
+        {% if privacy.k_anonymity.bucketized_fields %}
+        <li>Bucketized numeric fields: {{ privacy.k_anonymity.bucketized_fields | join(', ') }}</li>
+        {% endif %}
+      </ul>
+      {% endif %}
+      {% if privacy.differential_privacy %}
+      <h3>Differential Privacy</h3>
+      <ul>
+        <li>Enabled: {{ privacy.differential_privacy.enabled }}</li>
+        <li>Epsilon: {{ privacy.differential_privacy.epsilon if privacy.differential_privacy.epsilon is not none else 'N/A' }}</li>
+        {% if privacy.differential_privacy.applied_fields %}
+        <li>Applied to fields: {{ privacy.differential_privacy.applied_fields | join(', ') }}</li>
+        {% endif %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endif %}
+
     {% if validation.rule_violations %}
     <section>
       <h2>Rule Violations</h2>

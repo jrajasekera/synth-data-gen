@@ -6,6 +6,7 @@ import json
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from itertools import combinations
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -13,8 +14,9 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from .io import ChunkingConfig, JSONStream
-from .llm import LLMClient
-from .utils import RNGConfig
+from .llm import LLMClient, LLMResponseError
+from .schemas import PROFILE_SUMMARY_SCHEMA, REGEX_CANDIDATE_ARRAY_SCHEMA
+from .utils import RNGConfig, stable_hash
 
 ProgressCallback = Callable[[int], None]
 
@@ -118,6 +120,8 @@ class FieldStats:
     array_lengths: NumericAccumulator = field(default_factory=NumericAccumulator)
     pii_likelihood: float = 0.0
     anomalies: list[dict[str, Any]] = field(default_factory=list)
+    llm_confidence: float = 0.0
+    narratives: list[str] = field(default_factory=list)
 
     MAX_UNIQUE_TRACKED = 20000
 
@@ -165,6 +169,10 @@ class FieldStats:
             for value, count in self.categorical.most_common(10)
         ]
 
+        heuristic_confidence = self._heuristic_confidence(types_summary)
+        llm_confidence = round(max(0.0, min(self.llm_confidence, 1.0)), 4)
+        overall_confidence = round(max(heuristic_confidence, llm_confidence), 4)
+
         summary = {
             "types": types_summary,
             "required_rate": self.required_rate(),
@@ -176,6 +184,12 @@ class FieldStats:
             "pii_likelihood": self.pii_likelihood,
             "anomalies": self.anomalies,
             "semantic_type": self.semantic_type,
+            "confidence": {
+                "heuristic": heuristic_confidence,
+                "llm": llm_confidence,
+                "overall": overall_confidence,
+            },
+            "narratives": list(self.narratives),
         }
 
         if self.array_lengths.count:
@@ -214,14 +228,62 @@ class FieldStats:
             return
         self.uniqueness.add(hashable)
 
+    def _heuristic_confidence(self, types_summary: list[dict[str, Any]]) -> float:
+        if self.total == 0:
+            return 0.0
+        coverage = min(1.0, self.total / (self.total + 50))
+        dominant_confidence = types_summary[0]["confidence"] if types_summary else 0.0
+        anomaly_penalty = min(len(self.anomalies), 5) * 0.05
+        base = 0.6 * coverage + 0.4 * dominant_confidence
+        if self.semantic_type:
+            base = min(1.0, base + 0.1)
+        base = max(0.0, base * (1.0 - anomaly_penalty))
+        return round(base, 4)
+
+
+MAX_COMPOSITE_TRACKED = 20000
+MAX_COMPOSITE_KEY_SIZE = 3
+
+
+@dataclass(slots=True)
+class CompositeTracker:
+    values: set[str] = field(default_factory=set)
+    truncated: bool = False
+    observations: int = 0
+
+    def add(self, fingerprint: str) -> None:
+        self.observations += 1
+        if self.truncated:
+            return
+        if len(self.values) >= MAX_COMPOSITE_TRACKED:
+            self.truncated = True
+            self.values.clear()
+            return
+        self.values.add(fingerprint)
+
+    def uniqueness_ratio(self) -> float:
+        if self.observations == 0 or self.truncated:
+            return 0.0
+        return min(len(self.values) / self.observations, 1.0)
+
+
+def _serialize_scalar(value: Any) -> Optional[str]:
+    if value is None or isinstance(value, (dict, list)):
+        return None
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return None
 
 class ProfileAccumulator:
     """Accumulate statistics across records."""
 
     def __init__(self) -> None:
         self.fields: dict[str, FieldStats] = {}
+        self.composite_trackers: dict[tuple[str, ...], "CompositeTracker"] = {}
 
     def record(self, record: dict[str, Any]) -> None:
+        self._track_composite_candidates(record)
         self._walk(record, path="$")
 
     def _walk(self, value: Any, path: str) -> None:
@@ -239,6 +301,26 @@ class ProfileAccumulator:
             item_path = f"{path}[]"
             for item in value:
                 self._walk(item, item_path)
+
+    def _track_composite_candidates(self, record: dict[str, Any]) -> None:
+        scalar_paths: dict[str, str] = {}
+        for key, value in record.items():
+            serialized = _serialize_scalar(value)
+            if serialized is None:
+                continue
+            path = f"$.{key}"
+            scalar_paths[path] = serialized
+
+        if len(scalar_paths) < 2:
+            return
+
+        ordered_paths = sorted(scalar_paths)
+        max_size = min(len(ordered_paths), MAX_COMPOSITE_KEY_SIZE)
+        for size in range(2, max_size + 1):
+            for combo in combinations(ordered_paths, size):
+                tracker = self.composite_trackers.setdefault(combo, CompositeTracker())
+                fingerprint = stable_hash([scalar_paths[path] for path in combo])
+                tracker.add(fingerprint)
 
     def build(self) -> dict[str, Any]:
         return {path: stats.to_summary() for path, stats in sorted(self.fields.items())}
@@ -280,6 +362,7 @@ def profile_dataset(
 
     field_summaries = accumulator.build()
     pk_candidates = []
+    pk_path_sets: set[tuple[str, ...]] = set()
 
     for path, stats in accumulator.fields.items():
         if stats.is_unique():
@@ -290,13 +373,24 @@ def profile_dataset(
                     "confidence": 0.8 if stats.uniqueness_truncated else 1.0,
                 }
             )
+            pk_path_sets.add((path,))
+
+    composite_candidates = _composite_key_candidates(accumulator, total_records)
+    for candidate in composite_candidates:
+        path_key = tuple(candidate["paths"])
+        if path_key in pk_path_sets:
+            continue
+        pk_candidates.append(candidate)
+        pk_path_sets.add(path_key)
+
+    fk_candidates = _foreign_key_candidates(accumulator)
 
     return {
         "meta": {"records_total": total_records},
         "field_summaries": field_summaries,
         "keys": {
             "pk_candidates": pk_candidates,
-            "fk_candidates": [],
+            "fk_candidates": fk_candidates,
         },
         "functional_dependencies": [],
         "temporal_patterns": [],
@@ -390,16 +484,15 @@ def _llm_regex_inference(samples: list[str], llm: LLMClient) -> list[dict[str, A
     }
 
     try:
-        response = llm.generate_text(payload)
-    except Exception:  # pragma: no cover - network/LLM failures fallback to heuristics
+        data = llm.generate_text(
+            payload,
+            schema=REGEX_CANDIDATE_ARRAY_SCHEMA,
+            parse_json=True,
+        )
+    except (LLMResponseError, Exception):  # pragma: no cover - network/LLM failures fallback
         return []
 
     try:
-        choices = response.get("choices") or []
-        if not choices:
-            return []
-        content = choices[0]["message"]["content"].strip()
-        data = json.loads(content)
         if not isinstance(data, list):
             return []
         regexes: list[dict[str, Any]] = []
@@ -444,7 +537,8 @@ def _llm_profile_chunk(
                     "role": "system",
                     "content": (
                         "You are a JSON data profiler. Analyse the records and respond with JSON containing `field_summaries` keyed by JSONPath. "
-                        "For each field include optional `semantic_type`, `regex_candidates` (with pattern/support/generality), and `pii_likelihood` (0-1)."
+                        "For each field include optional `semantic_type`, `regex_candidates` (with pattern/support/generality), and `pii_likelihood` (0-1). "
+                        "Always emit a numeric `confidence` between 0 and 1 for each field, and when applicable include a `narratives` array of short anomaly explanations."
                     ),
                 },
                 {
@@ -466,12 +560,15 @@ def _llm_profile_chunk(
             prompt["seed"] = rng.seed + chunk_id + slice_index
         prompts.append(prompt)
 
-    responses = llm.map_reduce(prompts)
+    responses = llm.map_reduce(
+        prompts,
+        schema=PROFILE_SUMMARY_SCHEMA,
+        parse_json=True,
+    )
     combined: dict[str, Any] = {"field_summaries": {}}
     for response in responses:
-        summary = _parse_llm_summary(response)
-        if summary:
-            _merge_field_summary(combined["field_summaries"], summary)
+        if isinstance(response, dict) and "field_summaries" in response:
+            _merge_field_summary(combined["field_summaries"], response)
 
     return combined
 
@@ -519,6 +616,10 @@ def _merge_llm_summary(accumulator: "ProfileAccumulator", summary: dict[str, Any
         if isinstance(pii_likelihood, (int, float)):
             stats.pii_likelihood = max(stats.pii_likelihood, float(pii_likelihood))
 
+        confidence = details.get("confidence")
+        if isinstance(confidence, (int, float)):
+            stats.llm_confidence = max(stats.llm_confidence, float(confidence))
+
         anomalies = details.get("anomalies")
         if isinstance(anomalies, list):
             for anomaly in anomalies:
@@ -527,24 +628,11 @@ def _merge_llm_summary(accumulator: "ProfileAccumulator", summary: dict[str, Any
                 if anomaly not in stats.anomalies:
                     stats.anomalies.append(anomaly)
 
-
-def _parse_llm_summary(response: dict[str, Any]) -> Optional[dict[str, Any]]:
-    choices = response.get("choices") if isinstance(response, dict) else None
-    if not choices:
-        return None
-    content = choices[0].get("message", {}).get("content", "")
-    if not content:
-        return None
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    summaries = data.get("field_summaries")
-    if not isinstance(summaries, dict):
-        return None
-    return data
+        narratives = details.get("narratives")
+        if isinstance(narratives, list):
+            for narrative in narratives:
+                if isinstance(narrative, str) and narrative not in stats.narratives:
+                    stats.narratives.append(narrative)
 
 
 def _merge_field_summary(
@@ -583,6 +671,83 @@ def _merge_field_summary(
             for anomaly in anomalies:
                 if anomaly not in target["anomalies"]:
                     target["anomalies"].append(anomaly)
+
+
+
+def _composite_key_candidates(accumulator: ProfileAccumulator, total_records: int) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    if total_records == 0:
+        return candidates
+
+    for paths, tracker in accumulator.composite_trackers.items():
+        if len(paths) < 2:
+            continue
+        if tracker.truncated or tracker.observations == 0:
+            continue
+        uniqueness = tracker.uniqueness_ratio()
+        if uniqueness < 0.95:
+            continue
+        coverage = tracker.observations / total_records
+        confidence = min(0.95, 0.5 + 0.3 * uniqueness + 0.2 * coverage)
+        candidates.append(
+            {
+                "paths": list(paths),
+                "uniqueness": round(uniqueness, 4),
+                "coverage": round(coverage, 4),
+                "confidence": round(confidence, 4),
+            }
+        )
+
+    candidates.sort(key=lambda item: (-item["confidence"], len(item["paths"])))
+    return candidates
+
+
+def _foreign_key_candidates(accumulator: ProfileAccumulator) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    field_entries: list[tuple[str, FieldStats, set[str]]] = []
+
+    for path, stats in accumulator.fields.items():
+        if stats.uniqueness_truncated:
+            continue
+        non_null = stats.total - stats.nulls
+        if non_null == 0:
+            continue
+        if not stats.uniqueness:
+            continue
+        field_entries.append((path, stats, set(stats.uniqueness)))
+
+    for child_path, child_stats, child_values in field_entries:
+        if len(child_values) == 0:
+            continue
+        child_required = child_stats.required_rate()
+        for parent_path, parent_stats, parent_values in field_entries:
+            if child_path == parent_path:
+                continue
+            if len(child_values) > len(parent_values):
+                continue
+            if not parent_stats.is_unique():
+                continue
+            if child_values.issubset(parent_values):
+                support = len(child_values) / max(len(parent_values), 1)
+                confidence = min(0.95, 0.4 + 0.4 * child_required + 0.15 * support + 0.05)
+                candidates.append(
+                    {
+                        "parent": parent_path,
+                        "child": child_path,
+                        "coverage": round(child_required, 4),
+                        "support": round(support, 4),
+                        "confidence": round(confidence, 4),
+                    }
+                )
+
+    unique_pairs: dict[tuple[str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        key = (candidate["parent"], candidate["child"])
+        existing = unique_pairs.get(key)
+        if existing is None or candidate["confidence"] > existing["confidence"]:
+            unique_pairs[key] = candidate
+
+    return sorted(unique_pairs.values(), key=lambda item: -item["confidence"])
 
 
 

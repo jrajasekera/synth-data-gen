@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from .llm import LLMClient
+from . import text_rules as text_rules_module
+from .llm import LLMClient, LLMResponseError
+from .schemas import RULE_REFINEMENT_SCHEMA
 
 
 def synthesize_rules(profile: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +72,10 @@ def synthesize_rules(profile: dict[str, Any]) -> dict[str, Any]:
                 key: value for key, value in array_info.items() if value is not None
             }
 
+        text_rule = text_rules_module.heuristic_text_rules(path, summary)
+        if text_rule:
+            rule["text_rules"] = text_rules_module.merge_text_rules(None, text_rule)
+
         rules["fields"][path] = rule
 
     return rules
@@ -85,6 +91,8 @@ def rules_from_profile(
     base_rules = synthesize_rules(profile)
     if llm is None:
         return base_rules
+
+    text_rules_module.refine_text_rules(profile, base_rules, llm)
 
     refined = _refine_rules_with_llm(profile, base_rules, llm)
     return refined or base_rules
@@ -106,7 +114,7 @@ def _refine_rules_with_llm(
                 "role": "system",
                 "content": (
                     "You refine synthetic data rules. Return JSON {\"fields\": {<jsonpath>: {optional keys}}} "
-                    "with semantic_type, regex, enum, pii_likelihood as needed."
+                    "with semantic_type, regex, enum, pii_likelihood, and optional text_rules (templates/conditions)."
                 ),
             },
             {
@@ -125,16 +133,23 @@ def _refine_rules_with_llm(
     }
 
     try:
-        response = llm.generate_text(payload)
-    except Exception:
+        refinements = llm.generate_text(
+            payload,
+            schema=RULE_REFINEMENT_SCHEMA,
+            parse_json=True,
+        )
+    except (LLMResponseError, Exception):
         return None
 
-    refinements = _parse_rule_refinement(response)
-    if refinements is None:
+    if not isinstance(refinements, dict):
+        return None
+
+    fields = refinements.get("fields")
+    if not isinstance(fields, dict):
         return None
 
     merged = {"fields": {**rules.get("fields", {})}}
-    for path, details in refinements.items():
+    for path, details in fields.items():
         if not isinstance(details, dict):
             continue
         target = merged["fields"].setdefault(path, {})
@@ -151,21 +166,10 @@ def _refine_rules_with_llm(
         if isinstance(pii, (int, float)):
             target["pii_likelihood"] = float(pii)
 
+        text_rules = details.get("text_rules")
+        if isinstance(text_rules, dict):
+            merged_rules = text_rules_module.merge_text_rules(target.get("text_rules"), text_rules)
+            if merged_rules.get("templates"):
+                target["text_rules"] = merged_rules
+
     return merged
-
-
-def _parse_rule_refinement(response: dict[str, Any]) -> Optional[dict[str, Any]]:
-    choices = response.get("choices") if isinstance(response, dict) else None
-    if not choices:
-        return None
-    content = choices[0].get("message", {}).get("content", "")
-    if not content:
-        return None
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    fields = data.get("fields") if isinstance(data, dict) else None
-    if not isinstance(fields, dict):
-        return None
-    return fields

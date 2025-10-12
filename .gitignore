@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 .idea
+tmp/
+examples/sample_2.json

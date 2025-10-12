@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import rich
 import rich.traceback
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TimeElapsedColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+)
 import yaml
 
 from . import profile as profile_module
@@ -20,7 +27,7 @@ from . import report as report_module
 from . import rules as rules_module
 from . import privacy as privacy_module
 from .io import ChunkingConfig, JSONStream
-from .llm import LLMClient
+from .llm import LLMClient, LLMConfig
 from .utils import RNGConfig
 
 rich.traceback.install(show_locals=False)
@@ -68,7 +75,10 @@ def profile(
 
     llm_client: Optional[LLMClient] = None
     if use_llm:
-        llm_client = LLMClient(cache_dir=cache_dir)
+        llm_config = LLMConfig()
+        if seed is not None:
+            llm_config.global_seed = seed
+        llm_client = LLMClient(config=llm_config, cache_dir=cache_dir)
 
     try:
         with Progress(SpinnerColumn(), *Progress.get_default_columns(), TimeElapsedColumn()) as progress:
@@ -109,6 +119,16 @@ def synthesize(
         "--default-array-cap",
         help="Maximum length for arrays when no profile metadata is present.",
     ),
+    checkpoint_path: Optional[Path] = typer.Option(
+        None,
+        "--checkpoint-path",
+        help="Optional JSON file to persist generation progress for resumability.",
+    ),
+    checkpoint_interval: int = typer.Option(
+        1000,
+        "--checkpoint-interval",
+        help="Write progress to checkpoint after this many records; ignored if not positive.",
+    ),
 ) -> None:
     """Generate synthetic records using a profile and optional rule set."""
 
@@ -125,16 +145,73 @@ def synthesize(
     output_path = output_path.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with output_path.open("w", encoding="utf-8") as handle:
-        generate_module.generate_synthetic_data(
-            profile=profile_data,
-            ruleset=ruleset,
-            output_handle=handle,
-            count=count,
-            rng=rng_config,
-            cache_dir=cache_dir,
-            default_array_cap=default_array_cap,
+    resume = False
+    checkpoint_state: Optional[dict[str, Any]] = None
+    checkpoint_generated = 0
+    if checkpoint_path is not None:
+        checkpoint_candidate = checkpoint_path.expanduser().resolve()
+        if checkpoint_candidate.exists():
+            try:
+                checkpoint_state = json.loads(checkpoint_candidate.read_text())
+            except (OSError, json.JSONDecodeError):
+                checkpoint_state = None
+        resume = bool(
+            checkpoint_state
+            and isinstance(checkpoint_state.get("generated"), int)
+            and checkpoint_state["generated"] > 0
         )
+        if resume:
+            checkpoint_generated = int(checkpoint_state["generated"])
+
+    open_mode = "a" if resume else "w"
+    if resume and output_path.exists():
+        existing_content = output_path.read_text()
+        lines = existing_content.splitlines()
+        if len(lines) > checkpoint_generated:
+            trimmed = "\n".join(lines[:checkpoint_generated])
+            if trimmed:
+                trimmed += "\n"
+            output_path.write_text(trimmed)
+        elif len(lines) < checkpoint_generated:
+            resume = False
+            open_mode = "w"
+        elif lines and not existing_content.endswith("\n"):
+            with output_path.open("a", encoding="utf-8") as padding:
+                padding.write("\n")
+
+    def _execute(progress_cb: Optional) -> None:
+        with output_path.open(open_mode, encoding="utf-8") as handle:
+            generate_module.generate_synthetic_data(
+                profile=profile_data,
+                ruleset=ruleset,
+                output_handle=handle,
+                count=count,
+                rng=rng_config,
+                cache_dir=cache_dir,
+                default_array_cap=default_array_cap,
+                checkpoint_path=checkpoint_path,
+                checkpoint_interval=checkpoint_interval,
+                progress_callback=progress_cb,
+            )
+
+    if count > 0:
+        with Progress(
+            SpinnerColumn(),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task_id = progress.add_task("Generating", total=count)
+            if resume and checkpoint_generated:
+                progress.update(task_id, completed=min(checkpoint_generated, count))
+
+            def _progress_cb(done: int) -> None:
+                progress.update(task_id, completed=min(done, count))
+
+            _execute(_progress_cb)
+    else:
+        _execute(None)
 
     console.print(f"Synthetic data written to [green]{output_path}[/green]")
 

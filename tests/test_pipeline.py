@@ -101,6 +101,37 @@ class PipelineIntegrationTests(unittest.TestCase):
         self.assertFalse(validation["rule_violations"], msg="Expected no rule violations")
         array_delta = validation["field_comparisons"].get("$.orders", {}).get("array")
         self.assertIsNotNone(array_delta)
+        self.assertIn("correlation_drift", validation)
+        self.assertIn("temporal_alignment", validation)
+        self.assertIn("privacy", validation)
+        self.assertIn("k_anonymity", validation["privacy"])
+        for details in validation["temporal_alignment"].values():
+            self.assertIn("statistics", details)
+            self.assertIn("ks", details["statistics"])
+        privacy_info = validation["privacy"]
+        self.assertIn("generalized_fields", privacy_info["k_anonymity"])
+
+    def test_profile_confidence_structure(self) -> None:
+        profile = self._profile_source()
+        email_summary = profile["field_summaries"]["$.email"]
+        confidence = email_summary.get("confidence")
+        self.assertIsInstance(confidence, dict)
+        self.assertIn("heuristic", confidence)
+        self.assertIn("overall", confidence)
+        narratives = email_summary.get("narratives")
+        self.assertIsInstance(narratives, list)
+
+    def test_rules_include_text_rules(self) -> None:
+        profile = self._profile_source()
+        ruleset = rules_module.synthesize_rules(profile)
+        email_rule = ruleset["fields"].get("$.email")
+        self.assertIsNotNone(email_rule)
+        text_rules = email_rule.get("text_rules")
+        self.assertIsNotNone(text_rules)
+        self.assertTrue(text_rules.get("templates"))
+        first_template = text_rules["templates"][0]
+        self.assertIn("kind", first_template)
+        self.assertIn("value", first_template)
 
     def test_plugin_generator_override(self) -> None:
         profile = self._profile_source()
@@ -174,6 +205,41 @@ class PipelineIntegrationTests(unittest.TestCase):
             registry.generators.pop(name, None)
         else:
             registry.generators[name] = factory
+
+    def test_composite_and_fk_detection(self) -> None:
+        composite_path = Path(self.tempdir.name) / "composite.json"
+        composite_records = [
+            {
+                "country": "US",
+                "code": "001",
+                "customer_id": "C1",
+                "order": {"customer_id": "C1"},
+            },
+            {
+                "country": "US",
+                "code": "002",
+                "customer_id": "C2",
+                "order": {"customer_id": "C1"},
+            },
+            {
+                "country": "CA",
+                "code": "001",
+                "customer_id": "C3",
+                "order": {"customer_id": "C2"},
+            },
+        ]
+        composite_path.write_text(json.dumps(composite_records))
+
+        stream = JSONStream(composite_path, ChunkingConfig(size=16, format="json_array"))
+        profile = profile_module.profile_dataset(stream=stream, rng=RNGConfig(7), cache_dir=None)
+
+        pk_candidates = {tuple(candidate["paths"]) for candidate in profile["keys"]["pk_candidates"]}
+        self.assertIn(("$.code", "$.country"), pk_candidates)
+
+        fk_pairs = {
+            (candidate["parent"], candidate["child"]) for candidate in profile["keys"].get("fk_candidates", [])
+        }
+        self.assertIn(("$.customer_id", "$.order.customer_id"), fk_pairs)
 
 
 if __name__ == "__main__":
