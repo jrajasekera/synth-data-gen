@@ -113,8 +113,40 @@ def _refine_rules_with_llm(
             {
                 "role": "system",
                 "content": (
-                    "You refine synthetic data rules. Return JSON {\"fields\": {<jsonpath>: {optional keys}}} "
-                    "with semantic_type, regex, enum, pii_likelihood, and optional text_rules (templates/conditions)."
+                    "You refine rules for synthetic data generation to improve realism and accuracy.\n\n"
+                    "You'll receive:\n"
+                    "1. field_summaries: Statistical and structural metadata from profiling real data\n"
+                    "2. current_rules: The baseline generation rules\n\n"
+                    "Your task: Enhance the rules by:\n"
+                    "- Adding/correcting semantic_type when patterns are clear (email, phone, name, etc.)\n"
+                    "- Providing regex patterns for structured fields (IDs, codes, formats)\n"
+                    "- Suggesting enum values for low-cardinality categorical fields\n"
+                    "- Updating pii_likelihood based on field characteristics\n"
+                    "- Adding text_rules for complex text generation (templates with conditions)\n\n"
+                    "Return JSON:\n"
+                    "{\n"
+                    '  "fields": {\n'
+                    '    "<jsonpath>": {\n'
+                    '      "semantic_type": "email",  // only if confident\n'
+                    '      "regex": "^[A-Z]{3}\\d{4}$",  // for structured formats\n'
+                    '      "enum": ["active", "pending", "closed"],  // for categorical (< 20 unique values)\n'
+                    '      "pii_likelihood": 0.9,  // 0.0-1.0\n'
+                    '      "text_rules": {\n'
+                    '        "templates": [\n'
+                    '          {"kind": "faker", "value": "email", "weight": 1.0, "description": "Generate email via Faker"}\n'
+                    '        ],\n'
+                    '        "conditions": [\n'
+                    '          {"when": "missing", "template": {"kind": "literal", "value": "N/A"}}\n'
+                    '        ]\n'
+                    '      }\n'
+                    '    }\n'
+                    '  }\n'
+                    "}\n\n"
+                    "Guidelines:\n"
+                    "- Only add regex if the pattern is consistent across >80% of samples\n"
+                    "- Use enum only for fields with < 20 unique values and high frequency\n"
+                    "- Template kinds: 'literal', 'faker', 'regex', 'pattern'\n"
+                    "- Focus on fields where current_rules are weak or missing"
                 ),
             },
             {

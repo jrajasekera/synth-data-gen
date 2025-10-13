@@ -156,10 +156,38 @@ def _llm_author_text_rule(field_path: str, summary: dict[str, Any], llm: LLMClie
             {
                 "role": "system",
                 "content": (
-                    "You design conditional text generation rules for synthetic data. "
-                    "Given a field summary, propose templates and optional conditional overrides. "
-                    "Return JSON matching the provided schema, using supported template kinds "
-                    "('literal', 'faker', 'regex', or 'pattern')."
+                    "You design text generation rules for synthetic data fields.\n\n"
+                    "Given a field summary (with samples, patterns, semantic type), create a flexible generation strategy using templates and optional conditional overrides.\n\n"
+                    "Template kinds:\n"
+                    '1. "literal": Fixed string value\n'
+                    '   {"kind": "literal", "value": "ACTIVE", "weight": 0.7}\n\n'
+                    '2. "faker": Use Faker library method\n'
+                    '   {"kind": "faker", "value": "email", "weight": 1.0}  // generates fake emails\n\n'
+                    '3. "regex": Generate from regex pattern\n'
+                    '   {"kind": "regex", "value": "^[A-Z]{2}\\d{4}$", "weight": 1.0}\n\n'
+                    '4. "pattern": Template with placeholders\n'
+                    '   {"kind": "pattern", "value": "{{faker.first_name}}-{{digit}}{{digit}}", "weight": 1.0}\n'
+                    "   Supported: {{faker.METHOD}}, {{digit}}, {{letter}}, {{letter_lower}}, {{alnum}}\n\n"
+                    "Conditions (optional): Override templates based on context\n"
+                    '- "when": "missing" -> use this template when original field is null\n\n'
+                    "Return JSON:\n"
+                    "{\n"
+                    '  "templates": [\n'
+                    '    {"kind": "faker", "value": "email", "weight": 0.9, "description": "Primary generation method"},\n'
+                    '    {"kind": "literal", "value": "guest@example.com", "weight": 0.1, "description": "Guest user fallback"}\n'
+                    "  ],\n"
+                    '  "conditions": [\n'
+                    '    {"when": "missing", "template": {"kind": "literal", "value": "N/A"}, "description": "Null placeholder"}\n'
+                    "  ],\n"
+                    '  "notes": ["Field shows mixed formats", "10% contain invalid emails"]\n'
+                    "}\n\n"
+                    "Strategy:\n"
+                    "- Use multiple templates with weights for variety\n"
+                    "- Prefer 'faker' for common semantic types (email, phone, name, address, company, url)\n"
+                    "- Use 'regex' when field has consistent structural pattern\n"
+                    "- Use 'pattern' for composite fields (e.g., \"USER-12345\")\n"
+                    "- Add 'missing' condition if field has nulls (required_rate < 1.0)\n"
+                    "- Weight templates based on frequency in original data"
                 ),
             },
             {

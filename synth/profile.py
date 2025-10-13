@@ -481,7 +481,31 @@ def _llm_regex_inference(samples: list[str], llm: LLMClient) -> list[dict[str, A
         "messages": [
             {
                 "role": "system",
-                "content": "You infer regular expressions for data fields. Respond with JSON array of objects: {\"pattern\", \"support\", \"generality\"}.",
+                "content": (
+                    "You are a regex pattern expert. Given sample field values, generate regular expressions that match them.\n\n"
+                    "Task: Analyze the provided examples and create regex patterns that capture their structure.\n\n"
+                    "Return a JSON array of pattern objects:\n"
+                    "[\n"
+                    "  {\n"
+                    '    "pattern": "^[A-Z]{2}\\d{4}$",\n'
+                    '    "support": 5,\n'
+                    '    "generality": 0.7\n'
+                    "  }\n"
+                    "]\n\n"
+                    "Fields explained:\n"
+                    "- pattern: A valid JavaScript/Python regex (use \\\\ for escaping)\n"
+                    "- support: How many of the provided examples match this pattern\n"
+                    "- generality: How broadly applicable (0.0 = very specific, 1.0 = matches many variations)\n\n"
+                    "Guidelines:\n"
+                    "- Prefer simpler patterns over complex ones when possible\n"
+                    "- Use character classes (\\d, \\w) rather than verbose alternatives\n"
+                    "- Return multiple patterns if examples show distinct formats\n"
+                    "- generality should be lower for very specific patterns (like exact strings)\n"
+                    "- Ensure patterns are anchored (^ and $) if examples suggest fixed format\n\n"
+                    "Example:\n"
+                    'Input: ["user@example.com", "admin@test.org"]\n'
+                    'Output: [{"pattern": "^[^@]+@[^@]+\\.[a-z]+$", "support": 2, "generality": 0.85}]\n'
+                ),
             },
             {
                 "role": "user",
@@ -546,9 +570,34 @@ def _llm_profile_chunk(
                 {
                     "role": "system",
                     "content": (
-                        "You are a JSON data profiler. Analyse the records and respond with JSON containing `field_summaries` keyed by JSONPath. "
-                        "For each field include optional `semantic_type`, `regex_candidates` (with pattern/support/generality), and `pii_likelihood` (0-1). "
-                        "Always emit a numeric `confidence` between 0 and 1 for each field, and when applicable include a `narratives` array of short anomaly explanations."
+                        "You are a JSON data profiler analyzing production datasets to extract metadata.\n\n"
+                        "Your task:\n"
+                        "1. Examine each field in the provided records\n"
+                        "2. Identify the semantic type (e.g., 'email', 'phone', 'name', 'address', 'url', 'uuid', 'ip_address')\n"
+                        "3. Detect regex patterns that match the field values\n"
+                        "4. Assess PII likelihood (0.0 = definitely not PII, 1.0 = definitely PII)\n"
+                        "5. Provide a confidence score based on consistency and sample size\n"
+                        "6. Note any anomalies (outliers, inconsistent formats, unexpected nulls, etc.)\n\n"
+                        "Respond with JSON containing `field_summaries` keyed by JSONPath (e.g., \"$.email\", \"$.user.age\").\n\n"
+                        "Example output structure:\n"
+                        "{\n"
+                        '  "field_summaries": {\n'
+                        '    "$.email": {\n'
+                        '      "semantic_type": "email",\n'
+                        '      "regex_candidates": [\n'
+                        '        {"pattern": "^[^@]+@[^@]+\\.[a-z]{2,}$", "support": 100, "generality": 0.8}\n'
+                        "      ],\n"
+                        '      "pii_likelihood": 0.95,\n'
+                        '      "confidence": 0.9,\n'
+                        '      "narratives": ["3 records contain invalid email format"]\n'
+                        "    }\n"
+                        "  }\n"
+                        "}\n\n"
+                        "Guidelines:\n"
+                        "- Only assign semantic_type if you're confident (confidence > 0.7)\n"
+                        "- regex_candidates: support = number of matching samples, generality = how broadly applicable (0-1)\n"
+                        "- Include narratives only for notable anomalies\n"
+                        "- Confidence factors: sample consistency, pattern clarity, statistical significance"
                     ),
                 },
                 {
