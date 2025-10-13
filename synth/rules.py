@@ -129,7 +129,7 @@ def _refine_rules_with_llm(
             },
         ],
         "temperature": 0.1,
-        "max_tokens": 1024,
+        "max_tokens": 4096,
     }
 
     try:

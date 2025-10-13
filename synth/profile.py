@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import combinations
@@ -19,6 +20,9 @@ from .schemas import PROFILE_SUMMARY_SCHEMA, REGEX_CANDIDATE_ARRAY_SCHEMA
 from .utils import RNGConfig, stable_hash
 
 ProgressCallback = Callable[[int], None]
+
+
+logger = logging.getLogger(__name__)
 
 
 _EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -352,8 +356,13 @@ def profile_dataset(
             try:
                 llm_summary = _llm_profile_chunk(chunk_index, chunk, llm, rng)
                 _merge_llm_summary(accumulator, llm_summary)
-            except Exception:
-                pass
+            except Exception as error:  # pragma: no cover - network faults logged
+                logger.warning(
+                    "LLM profiling skipped for chunk %s due to error: %s",
+                    chunk_index,
+                    error,
+                    exc_info=True,
+                )
 
         chunk_index += 1
 
@@ -480,7 +489,7 @@ def _llm_regex_inference(samples: list[str], llm: LLMClient) -> list[dict[str, A
             },
         ],
         "temperature": 0.1,
-        "max_tokens": 256,
+        "max_tokens": 4096,
     }
 
     try:
@@ -489,7 +498,8 @@ def _llm_regex_inference(samples: list[str], llm: LLMClient) -> list[dict[str, A
             schema=REGEX_CANDIDATE_ARRAY_SCHEMA,
             parse_json=True,
         )
-    except (LLMResponseError, Exception):  # pragma: no cover - network/LLM failures fallback
+    except (LLMResponseError, Exception) as error:  # pragma: no cover - network/LLM failures fallback
+        logger.warning("LLM regex inference failed: %s", error, exc_info=True)
         return []
 
     try:
@@ -520,14 +530,14 @@ def _llm_profile_chunk(
         return {}
 
     rand = rng.random()
-    sample_size = min(20, len(records))
+    sample_size = min(5, len(records))
     if len(records) > sample_size:
         indices = rand.sample(range(len(records)), k=sample_size)
-        sample = [records[i] for i in sorted(indices)]
+        sample = [_compact_record_for_llm(records[i]) for i in sorted(indices)]
     else:
-        sample = records
+        sample = [_compact_record_for_llm(record) for record in records]
 
-    batch_size = 5
+    batch_size = 3
     prompts: list[dict[str, Any]] = []
     for slice_index in range(0, len(sample), batch_size):
         subset = sample[slice_index : slice_index + batch_size]
@@ -554,23 +564,68 @@ def _llm_profile_chunk(
                 },
             ],
             "temperature": 0.1,
-            "max_tokens": 512,
+            "max_tokens": 4096,
         }
         if rng.seed is not None:
             prompt["seed"] = rng.seed + chunk_id + slice_index
         prompts.append(prompt)
 
-    responses = llm.map_reduce(
-        prompts,
-        schema=PROFILE_SUMMARY_SCHEMA,
-        parse_json=True,
-    )
+    try:
+        responses = llm.map_reduce(
+            prompts,
+            schema=PROFILE_SUMMARY_SCHEMA,
+            parse_json=True,
+        )
+    except Exception as error:  # pragma: no cover - log and fall back
+        logger.warning("LLM map_reduce failed for chunk %s: %s", chunk_id, error, exc_info=True)
+        return {}
     combined: dict[str, Any] = {"field_summaries": {}}
     for response in responses:
         if isinstance(response, dict) and "field_summaries" in response:
             _merge_field_summary(combined["field_summaries"], response)
 
     return combined
+
+
+def _compact_record_for_llm(
+    record: dict[str, Any],
+    *,
+    max_depth: int = 4,
+    max_list_items: int = 5,
+    max_string_length: int = 256,
+    max_keys: int = 20,
+) -> dict[str, Any]:
+    """Return a truncated copy of a record to keep LLM prompts lightweight."""
+
+    def _compact(value: Any, depth: int) -> Any:
+        if depth >= max_depth:
+            return "<truncated>"
+
+        if isinstance(value, dict):
+            trimmed: dict[str, Any] = {}
+            for idx, (key, child) in enumerate(value.items()):
+                if idx >= max_keys:
+                    trimmed["<truncated_keys>"] = len(value) - max_keys
+                    break
+                trimmed[key] = _compact(child, depth + 1)
+            return trimmed
+
+        if isinstance(value, list):
+            if not value:
+                return []
+            items = [_compact(item, depth + 1) for item in value[:max_list_items]]
+            if len(value) > max_list_items:
+                items.append(f"<truncated_list:{len(value) - max_list_items}>")
+            return items
+
+        if isinstance(value, str):
+            if len(value) > max_string_length:
+                return value[:max_string_length] + "…"
+            return value
+
+        return value
+
+    return _compact(record, 0)
 
 
 def _merge_llm_summary(accumulator: "ProfileAccumulator", summary: dict[str, Any]) -> None:

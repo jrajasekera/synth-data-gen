@@ -183,7 +183,7 @@ def _llm_author_text_rule(field_path: str, summary: dict[str, Any], llm: LLMClie
         ],
         "temperature": 0.2,
         "top_p": 0.9,
-        "max_tokens": 512,
+        "max_tokens": 4096,
     }
 
     seed = int(stable_hash([field_path])[:16], 16) % 2_147_483_647

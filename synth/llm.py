@@ -25,13 +25,13 @@ logger = logging.getLogger(__name__)
 class LLMConfig:
     """Configuration for connecting to a llama.cpp server."""
 
-    endpoint: str = "http://127.0.0.1:8080/v1"
-    model: str = "glm-4.5-air"
+    endpoint: str = "http://localhost:8080/v1"
+    model: str = "GLM-4.5-Air-45k"
     temperature: float = 0.2
     top_p: float = 0.95
-    max_tokens: int = 1024
-    timeout: float = 60.0
-    max_concurrent_requests: int = 2
+    max_tokens: int = 4096
+    timeout: float = 1200.0
+    max_concurrent_requests: int = 1
     batch_size: int = 4
     global_seed: Optional[int] = 0
 
@@ -155,7 +155,17 @@ class LLMClient:
             f"{self.config.endpoint}/chat/completions",
             json=payload,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            body = ""
+            try:
+                body = error.response.text if error.response is not None else ""
+            except Exception:  # pragma: no cover - defensive
+                body = "<unavailable>"
+            raise httpx.HTTPStatusError(
+                f"{error} | body: {body}", request=error.request, response=error.response
+            ) from error
         data = response.json()
 
         if self._cache is not None:
