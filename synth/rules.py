@@ -145,7 +145,7 @@ def _refine_rules_with_llm(
                     "Guidelines:\n"
                     "- Only add regex if the pattern is consistent across >80% of samples\n"
                     "- Use enum only for fields with < 20 unique values and high frequency\n"
-                    "- Template kinds: 'literal', 'faker', 'regex', 'pattern'\n"
+                    "- Template kinds: 'literal' (fixed string), 'faker' (Faker method), 'regex' (generate from pattern), 'pattern' (template with {{placeholders}})\n"
                     "- Focus on fields where current_rules are weak or missing"
                 ),
             },
